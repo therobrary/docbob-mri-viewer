@@ -1,0 +1,14 @@
+.DS_Store
+
+# Python
+backend/.venv/
+backend/**/__pycache__/
+backend/**/*.pyc
+
+# Node / frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Editor / OS
+.idea/
+.vscode/
