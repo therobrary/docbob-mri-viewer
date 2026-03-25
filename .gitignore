@@ -9,6 +9,9 @@ backend/**/*.pyc
 frontend/node_modules/
 frontend/dist/
 
+# Local sample studies
+DICOM/
+
 # Editor / OS
 .idea/
 .vscode/

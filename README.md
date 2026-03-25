@@ -6,7 +6,7 @@ Dr. Bob's MRI Viewer and Analyzer is a browser-based DICOM MRI viewer with an Ol
 
 - Loads local DICOM files and groups them into image series using DICOM metadata
 - Renders MRI stacks in the browser with Cornerstone3D
-- Supports multi-frame DICOM studies, including the bundled sample study in `DICOM/`
+- Supports multi-frame DICOM studies from local files or folders
 - Provides manual slice navigation plus a continuous `6 fps` cine loop
 - Sends rendered viewport snapshots to an Ollama-hosted MedGemma model
 - Supports both single-slice analysis and full-stack analysis
@@ -44,7 +44,7 @@ Dr. Bob's MRI Viewer and Analyzer is a browser-based DICOM MRI viewer with an Ol
 
 - `frontend/` — React + TypeScript MRI viewer UI
 - `backend/` — FastAPI analysis service and Ollama client
-- `DICOM/` — sample DICOM study used for local validation
+- `DICOM/` — optional local sample-study folder (gitignored)
 
 ## Local development
 
@@ -86,4 +86,4 @@ export OLLAMA_REPEAT_PENALTY=1.24
 - The model receives rendered viewport snapshots, not the raw DICOM volume
 - The backend now de-duplicates repeated model sentences before returning the response
 - Model output is assistive only and must not be treated as a diagnosis
-- The bundled sample DICOM study is useful for render and stack-analysis validation
+- Local sample studies can be placed in `DICOM/` for render and stack-analysis validation without committing them
