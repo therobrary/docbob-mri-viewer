@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:cloudflare": "wrangler dev",
+    "typecheck:worker": "tsc --noEmit --target ES2023 --lib ES2023,DOM,DOM.Iterable,WebWorker --module ESNext --moduleResolution bundler --strict --skipLibCheck worker/index.ts",
+    "deploy:cloudflare": "npm run build && npm run typecheck:worker && wrangler deploy"
   },
   "dependencies": {
     "@cornerstonejs/core": "^4.20.0",

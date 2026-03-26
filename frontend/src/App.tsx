@@ -13,7 +13,7 @@ import { loadDicomStudy, type DicomSeries, type SkippedFile } from './lib/dicom'
 const APP_TITLE = "Dr. Bob's MRI Viewer and Analyzer"
 const DEFAULT_ANALYSIS_PROMPT =
   'Review these MRI images as a single study. When multiple rendered slices are provided, synthesize the full stack into one concise study-level response. Output exactly two short sections labeled "Summary:" and "Impression:". Use no more than four sentences total. Mention only the most important findings. If no obvious abnormality is visible, say that once plainly. Do not describe each slice separately, do not list every normal structure, and do not repeat negative findings.'
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')
 const CINE_LOOP_FPS = 6
 const CINE_LOOP_INTERVAL_MS = Math.round(1000 / CINE_LOOP_FPS)
 

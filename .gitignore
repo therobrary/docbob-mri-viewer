@@ -8,6 +8,8 @@ backend/**/*.pyc
 # Node / frontend build artifacts
 frontend/node_modules/
 frontend/dist/
+frontend/.dev.vars
+frontend/.wrangler/
 
 # Local sample studies
 DICOM/

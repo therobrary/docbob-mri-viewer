@@ -81,6 +81,27 @@ export OLLAMA_REPEAT_PENALTY=1.24
 ./run_backend.sh
 ```
 
+## Cloudflare deployment
+
+The repository can now be deployed to Cloudflare as a single Worker-hosted app:
+
+- `frontend/dist` is served as static assets
+- `frontend/worker/index.ts` exposes `/health` and `/analyze`
+- the deployed frontend defaults to same-origin API calls, while local Vite dev still defaults to `http://127.0.0.1:8000`
+
+### Deploy steps
+
+```bash
+cd frontend
+cp .dev.vars.example .dev.vars
+# Edit .dev.vars or wrangler vars so OLLAMA_BASE_URL points to a public or tunneled Ollama endpoint.
+npm run deploy:cloudflare
+```
+
+### Important production note
+
+Cloudflare Workers cannot reach the current LAN-only Ollama URL (`http://192.168.8.150:11434`) unless you expose it through a public hostname, tunnel, or other reachable endpoint. If you only want to validate the deploy path first, set `MEDGEMMA_MODE=mock`.
+
 ## Notes and limitations
 
 - The model receives rendered viewport snapshots, not the raw DICOM volume
