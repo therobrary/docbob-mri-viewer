@@ -5,7 +5,7 @@ from .config import settings
 from .medgemma import MedGemmaConfigurationError, analyzer_registry
 from .schemas import AnalyzeRequest, AnalyzeResponse, HealthResponse
 
-app = FastAPI(title='MRI Viewer MedGemma Backend', version='0.1.0')
+app = FastAPI(title='DocBob Imaging Gateway Backend', version='0.2.0')
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,6 +17,7 @@ app.add_middleware(
 
 
 @app.get('/health', response_model=HealthResponse)
+@app.get('/api/health', response_model=HealthResponse)
 def health() -> HealthResponse:
     try:
         ready, message = analyzer_registry.readiness()
@@ -34,6 +35,7 @@ def health() -> HealthResponse:
 
 
 @app.post('/analyze', response_model=AnalyzeResponse)
+@app.post('/api/analyze', response_model=AnalyzeResponse)
 def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     try:
         analyzer = analyzer_registry.get()

@@ -6,12 +6,18 @@ interface Env {
   }
   MEDGEMMA_MODE?: string
   MEDGEMMA_MODEL_ID?: string
+  AI_BASE_URL?: string
+  AI_TIMEOUT_SECONDS?: string
+  AI_MAX_TOKENS?: string
+  AI_TEMPERATURE?: string
+  AI_TOP_P?: string
+  AI_AUTH_HEADER_NAME?: string
+  AI_AUTH_HEADER_VALUE?: string
   OLLAMA_BASE_URL?: string
   OLLAMA_TIMEOUT_SECONDS?: string
   OLLAMA_NUM_PREDICT?: string
   OLLAMA_TEMPERATURE?: string
   OLLAMA_TOP_P?: string
-  OLLAMA_REPEAT_PENALTY?: string
 }
 
 interface AnalyzeRequest {
@@ -39,32 +45,45 @@ interface HealthResponse {
   message: string | null
 }
 
-interface OllamaTagsResponse {
-  models?: Array<Record<string, unknown>>
-  error?: string
+interface GatewayErrorShape {
+  message?: string
 }
 
-interface OllamaShowResponse {
-  details?: unknown
-  model_info?: unknown
-  modelfile?: unknown
-  template?: unknown
-  error?: string
+interface GatewayModelsResponse {
+  data?: Array<{ id?: string }>
+  error?: string | GatewayErrorShape
+  message?: string
 }
 
-interface OllamaGenerateResponse {
-  response?: string
-  error?: string
+interface GatewayTextPart {
+  type?: string
+  text?: string
 }
 
-const DEFAULT_MEDGEMMA_MODE = 'ollama'
-const DEFAULT_MEDGEMMA_MODEL_ID = 'dcarrascosa/medgemma-1.5-4b-it:Q8_0'
-const DEFAULT_OLLAMA_BASE_URL = 'http://192.168.8.150:11434'
-const DEFAULT_OLLAMA_TIMEOUT_SECONDS = 120
-const DEFAULT_OLLAMA_NUM_PREDICT = 128
-const DEFAULT_OLLAMA_TEMPERATURE = 0.1
-const DEFAULT_OLLAMA_TOP_P = 0.75
-const DEFAULT_OLLAMA_REPEAT_PENALTY = 1.24
+interface GatewayChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string | GatewayTextPart[]
+    }
+  }>
+  error?: string | GatewayErrorShape
+  message?: string
+}
+
+interface GatewayRequestResult {
+  status: number
+  body: unknown
+  text: string
+}
+
+const DEFAULT_MEDGEMMA_MODE = 'gateway'
+const DEFAULT_MEDGEMMA_MODEL_ID = 'ollama-medgemma'
+const DEFAULT_AI_BASE_URL = 'https://aigateway.r0b.cc/v1'
+const DEFAULT_AI_TIMEOUT_SECONDS = 120
+const DEFAULT_AI_MAX_TOKENS = 256
+const DEFAULT_AI_TEMPERATURE = 0.1
+const DEFAULT_AI_TOP_P = 0.8
+const DEFAULT_AI_AUTH_HEADER_NAME = 'Authorization'
 
 const DATA_URL_PATTERN = /^data:(?<mime>[-\w.+/]+);base64,(?<data>.+)$/u
 const SENTENCE_SPLIT_PATTERN = /(?<=[.!?])\s+/u
@@ -80,12 +99,13 @@ class MedGemmaConfigurationError extends Error {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
+    const normalizedPath = normalizeApiPath(url.pathname)
 
-    if (request.method === 'OPTIONS' && (url.pathname === '/health' || url.pathname === '/analyze')) {
+    if (request.method === 'OPTIONS' && isApiPath(normalizedPath)) {
       return new Response(null, { status: 204, headers: corsHeaders() })
     }
 
-    if (url.pathname === '/health') {
+    if (normalizedPath === '/health') {
       if (request.method !== 'GET') {
         return jsonResponse({ detail: 'Method not allowed.' }, 405)
       }
@@ -97,7 +117,7 @@ export default {
       }
     }
 
-    if (url.pathname === '/analyze') {
+    if (normalizedPath === '/analyze') {
       if (request.method !== 'POST') {
         return jsonResponse({ detail: 'Method not allowed.' }, 405)
       }
@@ -118,6 +138,10 @@ export default {
       }
     }
 
+    if (url.pathname.startsWith('/api/')) {
+      return jsonResponse({ detail: 'Not found.' }, 404)
+    }
+
     return env.ASSETS.fetch(request)
   },
 }
@@ -128,7 +152,7 @@ async function health(env: Env): Promise<HealthResponse> {
   let message: string | null = null
 
   try {
-    ;[ready, message] = mode === 'mock' ? mockReadiness() : await ollamaReadiness(env)
+    ;[ready, message] = mode === 'mock' ? mockReadiness() : await gatewayReadiness(env)
   } catch (error) {
     if (error instanceof MedGemmaConfigurationError) {
       ready = false
@@ -155,37 +179,53 @@ async function analyze(request: Request, env: Env): Promise<AnalyzeResponse> {
     return mockAnalyze(payload)
   }
 
-  if (mode !== 'ollama') {
-    throw new MedGemmaConfigurationError(`Unsupported MEDGEMMA_MODE: ${mode}. Use "mock" or "ollama".`)
+  if (mode !== 'gateway') {
+    throw new MedGemmaConfigurationError(`Unsupported MEDGEMMA_MODE: ${mode}. Use "mock" or "gateway".`)
   }
 
-  const ollamaPayload = (await requestOllamaJson<OllamaGenerateResponse>(
-    env,
-    '/api/generate',
-    {
-      model: getModelId(env),
-      prompt: buildPrompt(payload),
-      images: getImageDataUrls(payload).map(extractImageBase64),
-      stream: false,
-      options: {
-        num_predict: getNumberSetting(env.OLLAMA_NUM_PREDICT, DEFAULT_OLLAMA_NUM_PREDICT),
-        temperature: getNumberSetting(env.OLLAMA_TEMPERATURE, DEFAULT_OLLAMA_TEMPERATURE),
-        top_p: getNumberSetting(env.OLLAMA_TOP_P, DEFAULT_OLLAMA_TOP_P),
-        repeat_penalty: getNumberSetting(env.OLLAMA_REPEAT_PENALTY, DEFAULT_OLLAMA_REPEAT_PENALTY),
+  const gatewayPayload = await requestGatewayJson<GatewayChatCompletionResponse>(env, '/chat/completions', {
+    model: getModelId(env),
+    max_tokens: getAiMaxTokens(env),
+    temperature: getAiTemperature(env),
+    top_p: getAiTopP(env),
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are an assistive radiology imaging reviewer. Stay concise, non-diagnostic, and follow the requested response format exactly.',
       },
-    },
-  )) as OllamaGenerateResponse
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: buildPrompt(payload) },
+          ...getImageDataUrls(payload).map((imageDataUrl) => ({
+            type: 'image_url',
+            image_url: {
+              url: validateImageDataUrl(imageDataUrl),
+            },
+          })),
+        ],
+      },
+    ],
+  })
 
-  const analysis = ollamaPayload.response
-  if (typeof analysis !== 'string' || !analysis.trim()) {
-    throw new MedGemmaConfigurationError('Ollama returned an empty analysis response.')
-  }
-
+  const analysis = extractCompletionText(gatewayPayload)
   const normalizedAnalysis = normalizeAnalysisOutput(analysis, payload.analysis_scope)
   const warnings = [
     'MedGemma output is assistive only and must not be treated as a diagnosis.',
     'This viewer sends rendered slice snapshots to the model, not the raw full-volume DICOM series.',
   ]
+
+  if (
+    payload.analysis_scope === 'stack' &&
+    payload.total_images !== null &&
+    payload.total_images !== undefined &&
+    getImageDataUrls(payload).length < payload.total_images
+  ) {
+    warnings.push(
+      `Stack analysis used ${getImageDataUrls(payload).length} representative rendered slice snapshots from ${payload.total_images} total images to keep the gateway request smaller.`,
+    )
+  }
 
   if (normalizedAnalysis !== analysis.trim()) {
     warnings.push('The backend shortened repetitive model output to keep the response concise.')
@@ -201,7 +241,7 @@ async function analyze(request: Request, env: Env): Promise<AnalyzeResponse> {
 function mockAnalyze(request: AnalyzeRequest): AnalyzeResponse {
   const imageCount = getImageDataUrls(request).length
   for (const imageDataUrl of getImageDataUrls(request)) {
-    extractImageBase64(imageDataUrl)
+    validateImageDataUrl(imageDataUrl)
   }
 
   const seriesContext = request.series_description ?? 'uploaded series'
@@ -213,7 +253,7 @@ function mockAnalyze(request: AnalyzeRequest): AnalyzeResponse {
       `Your prompt was: ${request.prompt}`,
     mode: 'mock',
     warnings: [
-      'Mock mode is active. Set MEDGEMMA_MODE=ollama to route requests to the configured Ollama server.',
+      'Mock mode is active. Set MEDGEMMA_MODE=gateway to route requests to the configured AI gateway.',
       'Treat model output as assistive only; this project does not provide diagnostic validation.',
     ],
   }
@@ -223,84 +263,135 @@ function mockReadiness(): [boolean, string] {
   return [true, 'Mock mode is active for local development. No model endpoint calls are being made.']
 }
 
-async function ollamaReadiness(env: Env): Promise<[boolean, string | null]> {
-  const tagsPayload = await requestOllamaJson<OllamaTagsResponse>(env, '/api/tags')
-  const models = tagsPayload.models
-  if (!Array.isArray(models)) {
-    return [false, 'Connected to Ollama, but the server returned an unexpected model list response.']
-  }
+async function gatewayReadiness(env: Env): Promise<[boolean, string | null]> {
+  ensureGatewayConfiguration(env)
 
+  const modelsResponse = await requestGateway(env, '/models', undefined, 'GET', [404, 405])
   const modelId = getModelId(env)
-  const modelAvailable = models.some((model) => {
-    if (!model || typeof model !== 'object') {
-      return false
-    }
-    return model.model === modelId || model.name === modelId
-  })
 
-  if (!modelAvailable) {
-    return [false, `Connected to Ollama at ${getOllamaBaseUrl(env)}, but model "${modelId}" is not available there.`]
-  }
-
-  const modelDetails = await requestOllamaJson<OllamaShowResponse>(env, '/api/show', { model: modelId })
-  if (!supportsImageInput(modelDetails)) {
+  if (modelsResponse.status === 404 || modelsResponse.status === 405) {
     return [
-      false,
-      `Connected to Ollama at ${getOllamaBaseUrl(env)} and found model "${modelId}", but its metadata does not indicate image-input support. Image analysis requests will fail until the server exposes a multimodal build of this model.`,
+      true,
+      `Connected to the AI gateway at ${getAiBaseUrl(env)}. The endpoint does not expose /models, so model validation will happen on analyze requests.`,
     ]
   }
 
-  return [true, `Connected to Ollama at ${getOllamaBaseUrl(env)} and found model "${modelId}".`]
+  const body = modelsResponse.body as GatewayModelsResponse
+  if (!Array.isArray(body.data)) {
+    return [true, `Connected to the AI gateway at ${getAiBaseUrl(env)}, but /models returned an unexpected response.`]
+  }
+
+  const modelAvailable = body.data.some((model) => model && typeof model.id === 'string' && model.id === modelId)
+  if (!modelAvailable) {
+    return [false, `Connected to the AI gateway at ${getAiBaseUrl(env)}, but model "${modelId}" was not listed there.`]
+  }
+
+  return [true, `Connected to the AI gateway at ${getAiBaseUrl(env)} and found model "${modelId}".`]
 }
 
-async function requestOllamaJson<T>(env: Env, path: string, payload?: unknown): Promise<T> {
+async function requestGatewayJson<T>(
+  env: Env,
+  path: string,
+  payload?: unknown,
+  method: 'GET' | 'POST' = payload === undefined ? 'GET' : 'POST',
+): Promise<T> {
+  const result = await requestGateway(env, path, payload, method)
+  if (!result.body || typeof result.body !== 'object') {
+    throw new MedGemmaConfigurationError('The AI gateway returned a non-JSON response.')
+  }
+  return result.body as T
+}
+
+async function requestGateway(
+  env: Env,
+  path: string,
+  payload?: unknown,
+  method: 'GET' | 'POST' = payload === undefined ? 'GET' : 'POST',
+  allowedErrorStatuses: number[] = [],
+): Promise<GatewayRequestResult> {
+  ensureGatewayConfiguration(env)
+
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), getNumberSetting(env.OLLAMA_TIMEOUT_SECONDS, DEFAULT_OLLAMA_TIMEOUT_SECONDS) * 1000)
+  const timeoutId = setTimeout(() => controller.abort(), getAiTimeoutSeconds(env) * 1000)
 
   try {
-    const response = await fetch(joinOllamaUrl(getOllamaBaseUrl(env), path), {
-      method: payload === undefined ? 'GET' : 'POST',
-      headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    const headers = new Headers({
+      Accept: 'application/json',
+      [getAiAuthHeaderName(env)]: getAiAuthHeaderValue(env),
+    })
+
+    if (payload !== undefined) {
+      headers.set('Content-Type', 'application/json')
+    }
+
+    const response = await fetch(joinAiUrl(getAiBaseUrl(env), path), {
+      method,
+      headers,
       body: payload === undefined ? undefined : JSON.stringify(payload),
       signal: controller.signal,
     })
 
     const responseText = await response.text()
-    const body = responseText ? (JSON.parse(responseText) as T & { error?: unknown }) : ({} as T & { error?: unknown })
+    const parsedBody = parseResponseBody(responseText)
 
-    if (!response.ok) {
-      const detail =
-        body && typeof body === 'object' && typeof body.error === 'string'
-          ? body.error
-          : responseText.trim() || `${response.status} ${response.statusText}`
-      throw new MedGemmaConfigurationError(`Ollama request to ${path} failed with ${response.status}: ${detail}`)
+    if (!response.ok && !allowedErrorStatuses.includes(response.status)) {
+      throw new MedGemmaConfigurationError(
+        `AI gateway request to ${path} failed with ${response.status}: ${getGatewayErrorMessage(parsedBody, responseText, response.statusText)}`,
+      )
     }
 
-    if (!body || typeof body !== 'object') {
-      throw new MedGemmaConfigurationError('Ollama returned a non-JSON response.')
+    return {
+      status: response.status,
+      body: parsedBody,
+      text: responseText,
     }
-
-    if (typeof body.error === 'string' && body.error) {
-      throw new MedGemmaConfigurationError(body.error)
-    }
-
-    return body
   } catch (error) {
     if (error instanceof MedGemmaConfigurationError) {
       throw error
     }
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new MedGemmaConfigurationError(
-        `Ollama request to ${path} timed out after ${getNumberSetting(env.OLLAMA_TIMEOUT_SECONDS, DEFAULT_OLLAMA_TIMEOUT_SECONDS)} seconds.`,
-      )
+      throw new MedGemmaConfigurationError(`AI gateway request to ${path} timed out after ${getAiTimeoutSeconds(env)} seconds.`)
     }
     if (error instanceof Error) {
-      throw new MedGemmaConfigurationError(`Unable to reach Ollama at ${getOllamaBaseUrl(env)}: ${error.message}`)
+      throw new MedGemmaConfigurationError(`Unable to reach the AI gateway at ${getAiBaseUrl(env)}: ${error.message}`)
     }
     throw error
   } finally {
     clearTimeout(timeoutId)
   }
+}
+
+function parseResponseBody(responseText: string): unknown {
+  if (!responseText.trim()) {
+    return {}
+  }
+
+  try {
+    return JSON.parse(responseText) as unknown
+  } catch {
+    return responseText
+  }
+}
+
+function extractCompletionText(payload: GatewayChatCompletionResponse): string {
+  const content = payload.choices?.[0]?.message?.content
+
+  if (typeof content === 'string' && content.trim()) {
+    return content
+  }
+
+  if (Array.isArray(content)) {
+    const textContent = content
+      .flatMap((part) => (part.type === 'text' && typeof part.text === 'string' ? [part.text.trim()] : []))
+      .filter(Boolean)
+      .join(' ')
+
+    if (textContent) {
+      return textContent
+    }
+  }
+
+  throw new MedGemmaConfigurationError('The AI gateway returned an empty analysis response.')
 }
 
 function validateAnalyzeRequest(value: unknown): AnalyzeRequest {
@@ -382,10 +473,12 @@ function buildPrompt(request: AnalyzeRequest): string {
 
   const imageCount = getImageDataUrls(request).length
   if (request.analysis_scope === 'stack' && request.total_images !== null && request.total_images !== undefined) {
-    context.push(
-      `Analyze the full rendered stack of ${imageCount} slice snapshots from first to last within a series containing ${request.total_images} total images.`,
-    )
-    context.push('Synthesize the entire ordered stack as one study-level review.')
+    const stackDescriptor =
+      imageCount < request.total_images
+        ? `Analyze ${imageCount} representative rendered slice snapshots sampled in order from a series containing ${request.total_images} total images.`
+        : `Analyze the full rendered stack of ${imageCount} slice snapshots from first to last within a series containing ${request.total_images} total images.`
+    context.push(stackDescriptor)
+    context.push('Synthesize the ordered images as one study-level review.')
     context.push('Return exactly two short sections labeled "Summary:" and "Impression:".')
     context.push('Use no more than four sentences total.')
     context.push('Mention only the most important overall findings across the stack.')
@@ -424,6 +517,9 @@ function getImageDataUrls(request: AnalyzeRequest): string[] {
 
 function describeAnalysisScope(request: AnalyzeRequest, imageCount: number): string {
   if (request.analysis_scope === 'stack') {
+    if (request.total_images !== null && request.total_images !== undefined && imageCount < request.total_images) {
+      return `a representative stack sample of ${imageCount} slice snapshots from ${request.total_images} total images`
+    }
     return `the full stack of ${imageCount} slice snapshots`
   }
   if (request.current_image_index !== null && request.current_image_index !== undefined && request.total_images) {
@@ -432,7 +528,7 @@ function describeAnalysisScope(request: AnalyzeRequest, imageCount: number): str
   return 'the current slice'
 }
 
-function extractImageBase64(imageDataUrl: string): string {
+function validateImageDataUrl(imageDataUrl: string): string {
   const match = DATA_URL_PATTERN.exec(imageDataUrl)
   if (!match?.groups?.data) {
     throw new MedGemmaConfigurationError('The frontend must send a PNG or JPEG data URL for analysis.')
@@ -444,7 +540,7 @@ function extractImageBase64(imageDataUrl: string): string {
     throw new MedGemmaConfigurationError('The frontend sent invalid base64 image data.')
   }
 
-  return match.groups.data
+  return imageDataUrl
 }
 
 function normalizeAnalysisOutput(text: string, analysisScope: AnalysisScope = 'slice'): string {
@@ -496,19 +592,58 @@ function normalizeSentence(sentence: string): string {
   return sentence.replace(WHITESPACE_PATTERN, ' ').trim().toLowerCase().replace(/[.!?…]+$/u, '')
 }
 
-function supportsImageInput(modelDetails: OllamaShowResponse): boolean {
-  const metadataBlob = JSON.stringify(
-    {
-      details: modelDetails.details,
-      model_info: modelDetails.model_info,
-      modelfile: modelDetails.modelfile,
-      template: modelDetails.template,
-    },
-    null,
-    0,
-  ).toLowerCase()
+function normalizeApiPath(pathname: string): string {
+  if (pathname === '/health' || pathname === '/analyze') {
+    return pathname
+  }
 
-  return ['image', 'vision', 'projector', 'mmproj', 'clip'].some((keyword) => metadataBlob.includes(keyword))
+  if (pathname.startsWith('/api/')) {
+    return pathname.slice(4)
+  }
+
+  return pathname
+}
+
+function isApiPath(pathname: string): boolean {
+  return pathname === '/health' || pathname === '/analyze'
+}
+
+function ensureGatewayConfiguration(env: Env): void {
+  if (!getAiBaseUrl(env).trim()) {
+    throw new MedGemmaConfigurationError('AI_BASE_URL must be configured for gateway mode.')
+  }
+  if (!getModelId(env).trim()) {
+    throw new MedGemmaConfigurationError('MEDGEMMA_MODEL_ID must be configured for gateway mode.')
+  }
+  if (!getAiAuthHeaderValue(env).trim()) {
+    throw new MedGemmaConfigurationError(
+      'AI_AUTH_HEADER_VALUE must be configured as a Worker secret before gateway requests can run.',
+    )
+  }
+}
+
+function getGatewayErrorMessage(body: unknown, responseText: string, fallback: string): string {
+  if (typeof body === 'string' && body.trim()) {
+    return body.trim()
+  }
+
+  if (body && typeof body === 'object') {
+    const record = body as Record<string, unknown>
+    if (typeof record.message === 'string' && record.message.trim()) {
+      return record.message.trim()
+    }
+    if (typeof record.error === 'string' && record.error.trim()) {
+      return record.error.trim()
+    }
+    if (record.error && typeof record.error === 'object') {
+      const errorRecord = record.error as Record<string, unknown>
+      if (typeof errorRecord.message === 'string' && errorRecord.message.trim()) {
+        return errorRecord.message.trim()
+      }
+    }
+  }
+
+  return responseText.trim() || fallback
 }
 
 function getMedgemmaMode(env: Env): string {
@@ -519,8 +654,32 @@ function getModelId(env: Env): string {
   return env.MEDGEMMA_MODEL_ID ?? DEFAULT_MEDGEMMA_MODEL_ID
 }
 
-function getOllamaBaseUrl(env: Env): string {
-  return env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL
+function getAiBaseUrl(env: Env): string {
+  return env.AI_BASE_URL ?? env.OLLAMA_BASE_URL ?? DEFAULT_AI_BASE_URL
+}
+
+function getAiTimeoutSeconds(env: Env): number {
+  return getNumberSetting(env.AI_TIMEOUT_SECONDS ?? env.OLLAMA_TIMEOUT_SECONDS, DEFAULT_AI_TIMEOUT_SECONDS)
+}
+
+function getAiMaxTokens(env: Env): number {
+  return getNumberSetting(env.AI_MAX_TOKENS ?? env.OLLAMA_NUM_PREDICT, DEFAULT_AI_MAX_TOKENS)
+}
+
+function getAiTemperature(env: Env): number {
+  return getNumberSetting(env.AI_TEMPERATURE ?? env.OLLAMA_TEMPERATURE, DEFAULT_AI_TEMPERATURE)
+}
+
+function getAiTopP(env: Env): number {
+  return getNumberSetting(env.AI_TOP_P ?? env.OLLAMA_TOP_P, DEFAULT_AI_TOP_P)
+}
+
+function getAiAuthHeaderName(env: Env): string {
+  return env.AI_AUTH_HEADER_NAME ?? DEFAULT_AI_AUTH_HEADER_NAME
+}
+
+function getAiAuthHeaderValue(env: Env): string {
+  return env.AI_AUTH_HEADER_VALUE ?? ''
 }
 
 function getNumberSetting(value: string | undefined, fallback: number): number {
@@ -531,7 +690,7 @@ function getNumberSetting(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function joinOllamaUrl(baseUrl: string, path: string): string {
+function joinAiUrl(baseUrl: string, path: string): string {
   return new URL(path.replace(/^\//u, ''), `${baseUrl.replace(/\/+$/u, '')}/`).toString()
 }
 

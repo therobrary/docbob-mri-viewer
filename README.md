@@ -1,50 +1,46 @@
-# Dr. Bob's MRI Viewer and Analyzer
+# DocBob Imaging Workbench
 
-Dr. Bob's MRI Viewer and Analyzer is a browser-based DICOM MRI viewer with an Ollama-backed analysis service. It lets you load local DICOM studies, browse multi-slice and multi-frame MRI series in the browser, run a continuous cine loop, and send either the current slice or the full rendered stack to a MedGemma-compatible vision model for an assistive summary.
+DocBob Imaging Workbench is a Cloudflare-first medical-imaging app. It currently ships an MRI review workspace that loads local DICOM studies in the browser, supports cine playback, and sends rendered slice snapshots to a MedGemma-compatible multimodal gateway for concise assistive interpretation.
 
-## What the project does
+The deployment structure is designed to grow into a shared landing page plus separate workspaces for:
 
-- Loads local DICOM files and groups them into image series using DICOM metadata
-- Renders MRI stacks in the browser with Cornerstone3D
-- Supports multi-frame DICOM studies from local files or folders
-- Provides manual slice navigation plus a continuous `6 fps` cine loop
-- Sends rendered viewport snapshots to an Ollama-hosted MedGemma model
-- Supports both single-slice analysis and full-stack analysis
-- Encourages concise output by using short-form prompting plus backend response cleanup for repetitive model loops
+- MRI
+- X-ray
+- Skin-lesion analysis
 
-## Software stack
+Only the MRI workspace is live in the UI today, but the Worker/API and frontend shell are being arranged so the next interfaces can be added without reworking the deployment model.
 
-### Frontend
+## Current architecture
 
-- `React 19`
-- `TypeScript`
-- `Vite`
-- `Cornerstone3D` and `@cornerstonejs/dicom-image-loader`
-- Custom DICOM multi-frame handling and local-file rendering helpers
+### Production
 
-### Backend
+- `frontend/` builds the SPA and Cloudflare Worker
+- the Worker serves static assets and exposes:
+  - `GET /api/health`
+  - `POST /api/analyze`
+- the deployed app is intended to be published at `https://docbob.robrary.com`
 
-- `Python`
-- `FastAPI`
-- `Uvicorn`
-- `httpx`
-- Ollama `/api/generate` integration for multimodal inference
+### Optional local fallback
 
-### Model / inference layer
+- `backend/` contains a FastAPI service that mirrors the Worker API for local development
+- the frontend talks to `http://127.0.0.1:8000/api` during local Vite development unless `VITE_API_BASE_URL` overrides it
 
-- Ollama server at `http://192.168.8.150:11434`
-- Model: `dcarrascosa/medgemma-1.5-4b-it:Q8_0`
-- Conservative generation defaults for shorter reports:
-  - `OLLAMA_NUM_PREDICT=128`
-  - `OLLAMA_TEMPERATURE=0.1`
-  - `OLLAMA_TOP_P=0.75`
-  - `OLLAMA_REPEAT_PENALTY=1.24`
+## Inference defaults
+
+- Base URL: `https://aigateway.r0b.cc/v1`
+- Model ID: `ollama-medgemma`
+- Mode: `gateway`
+- Default generation controls:
+  - `AI_MAX_TOKENS=256`
+  - `AI_TEMPERATURE=0.1`
+  - `AI_TOP_P=0.8`
+
+Requests are now sent to an OpenAI-compatible multimodal endpoint rather than Ollama's `/api/generate` API.
 
 ## Repository layout
 
-- `frontend/` — React + TypeScript MRI viewer UI
-- `backend/` — FastAPI analysis service and Ollama client
-- `DICOM/` — optional local sample-study folder (gitignored)
+- `frontend/` - React SPA, MRI workspace, Cloudflare Worker, Wrangler config
+- `backend/` - optional FastAPI local-development fallback
 
 ## Local development
 
@@ -56,55 +52,47 @@ npm install
 npm run dev
 ```
 
-By default, the frontend expects the backend at `http://127.0.0.1:8000`.
-
-### Backend
+### Optional local backend
 
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
+python3 -m ensurepip --upgrade
 pip install -r requirements.txt
-./run_backend.sh
-```
-
-Default environment:
-
-```bash
-export MEDGEMMA_MODE=ollama
-export MEDGEMMA_MODEL_ID=dcarrascosa/medgemma-1.5-4b-it:Q8_0
-export OLLAMA_BASE_URL=http://192.168.8.150:11434
-export OLLAMA_NUM_PREDICT=128
-export OLLAMA_TEMPERATURE=0.1
-export OLLAMA_TOP_P=0.75
-export OLLAMA_REPEAT_PENALTY=1.24
+cp .env.example .env
 ./run_backend.sh
 ```
 
 ## Cloudflare deployment
 
-The repository can now be deployed to Cloudflare as a single Worker-hosted app:
-
-- `frontend/dist` is served as static assets
-- `frontend/worker/index.ts` exposes `/health` and `/analyze`
-- the deployed frontend defaults to same-origin API calls, while local Vite dev still defaults to `http://127.0.0.1:8000`
-
-### Deploy steps
+### 1. Install frontend dependencies
 
 ```bash
 cd frontend
-cp .dev.vars.example .dev.vars
-# Edit .dev.vars or wrangler vars so OLLAMA_BASE_URL points to a public or tunneled Ollama endpoint.
+npm install
+```
+
+### 2. Set the Worker secret
+
+```bash
+npx wrangler secret put AI_AUTH_HEADER_VALUE
+```
+
+Use the full header value expected by the upstream gateway, for example `Bearer ...`.
+
+### 3. Deploy
+
+```bash
 npm run deploy:cloudflare
 ```
 
-### Important production note
+### 4. Attach the custom domain
 
-Cloudflare Workers cannot reach the current LAN-only Ollama URL (`http://192.168.8.150:11434`) unless you expose it through a public hostname, tunnel, or other reachable endpoint. If you only want to validate the deploy path first, set `MEDGEMMA_MODE=mock`.
+Deploy the Worker, then attach `docbob.robrary.com` as a Workers custom domain in Cloudflare.
 
-## Notes and limitations
+## Notes
 
-- The model receives rendered viewport snapshots, not the raw DICOM volume
-- The backend now de-duplicates repeated model sentences before returning the response
-- Model output is assistive only and must not be treated as a diagnosis
-- Local sample studies can be placed in `DICOM/` for render and stack-analysis validation without committing them
+- The model receives rendered viewport snapshots, not the raw DICOM volume.
+- Large stack analyses are sampled down to representative ordered slices before upload to reduce request size.
+- Model output is assistive only and must not be treated as a diagnosis.

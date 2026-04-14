@@ -10,6 +10,6 @@ fi
 
 source .venv/bin/activate
 
-MEDGEMMA_MODE="${MEDGEMMA_MODE:-ollama}"
+MEDGEMMA_MODE="${MEDGEMMA_MODE:-gateway}"
 
 exec uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload

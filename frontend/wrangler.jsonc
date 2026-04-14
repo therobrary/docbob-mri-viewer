@@ -1,20 +1,22 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "dr-bob-mri-viewer",
+  "name": "docbob",
   "main": "worker/index.ts",
   "compatibility_date": "2026-03-26",
   "assets": {
     "directory": "./dist",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
   },
   "vars": {
-    "MEDGEMMA_MODE": "ollama",
-    "MEDGEMMA_MODEL_ID": "dcarrascosa/medgemma-1.5-4b-it:Q8_0",
-    "OLLAMA_BASE_URL": "http://192.168.8.150:11434",
-    "OLLAMA_TIMEOUT_SECONDS": "120",
-    "OLLAMA_NUM_PREDICT": "128",
-    "OLLAMA_TEMPERATURE": "0.1",
-    "OLLAMA_TOP_P": "0.75",
-    "OLLAMA_REPEAT_PENALTY": "1.24"
+    "MEDGEMMA_MODE": "gateway",
+    "MEDGEMMA_MODEL_ID": "ollama-medgemma",
+    "AI_BASE_URL": "https://aigateway.r0b.cc/v1",
+    "AI_TIMEOUT_SECONDS": "120",
+    "AI_MAX_TOKENS": "256",
+    "AI_TEMPERATURE": "0.1",
+    "AI_TOP_P": "0.8",
+    "AI_AUTH_HEADER_NAME": "Authorization"
   }
 }
