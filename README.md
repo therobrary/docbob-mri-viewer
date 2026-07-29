@@ -96,3 +96,18 @@ Deploy the Worker, then attach `docbob.robrary.com` as a Workers custom domain i
 - The model receives rendered viewport snapshots, not the raw DICOM volume.
 - Large stack analyses are sampled down to representative ordered slices before upload to reduce request size.
 - Model output is assistive only and must not be treated as a diagnosis.
+
+
+## Security
+
+CORS is configured via an allowlist (`ALLOWED_ORIGINS`), not the previous `*` wildcard on the Worker. Disallowed origins get NO `Access-Control-Allow-Origin` header (the browser will block the response), and preflight (`OPTIONS`) from a disallowed origin returns 403. All CORS responses carry `Vary: Origin` to prevent poisoned-ACAO cache leaks.
+
+The allowlist can be overridden at deploy time via the `ALLOWED_ORIGINS` worker variable (space-separated origins in `wrangler.jsonc` `vars`); when unset, a hardcoded safe default is used.
+
+The CORS regression test lives at `/tmp/xss-smoke/docbob-cors-smoke.js`. Run it after any change to `frontend/worker/index.ts`:
+
+```bash
+cd /tmp/xss-smoke && node docbob-cors-smoke.js /Users/robert/Documents/codeprojects/docbob-mri-viewer/frontend/worker/index.ts
+```
+
+A passing run prints `OK: docbob-mri-viewer CORS never returns ACAO=*; ...` and exits 0. A failing run shows the offending origin and exits 1.

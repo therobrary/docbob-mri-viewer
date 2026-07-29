@@ -100,46 +100,53 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
     const normalizedPath = normalizeApiPath(url.pathname)
+    const origin = request.headers.get('Origin')
+    const allowedOrigins = resolveAllowedOrigins(env)
 
     if (request.method === 'OPTIONS' && isApiPath(normalizedPath)) {
-      return new Response(null, { status: 204, headers: corsHeaders() })
+      // SECURITY (M2): preflight from a disallowed origin is 403 (no ACAO),
+      // not 204. The browser never proceeds to the actual request.
+      if (origin && !allowedOrigins.includes(origin)) {
+        return new Response(null, { status: 403, headers: { 'Vary': 'Origin' } })
+      }
+      return new Response(null, { status: 204, headers: corsHeaders(origin, allowedOrigins) })
     }
 
     if (normalizedPath === '/health') {
       if (request.method !== 'GET') {
-        return jsonResponse({ detail: 'Method not allowed.' }, 405)
+        return jsonResponse({ detail: 'Method not allowed.' }, 405, origin, allowedOrigins)
       }
 
       try {
-        return jsonResponse(await health(env))
+        return jsonResponse(await health(env), 200, origin, allowedOrigins)
       } catch (error) {
-        return handleUnexpectedError(error)
+        return handleUnexpectedError(error, origin, allowedOrigins)
       }
     }
 
     if (normalizedPath === '/analyze') {
       if (request.method !== 'POST') {
-        return jsonResponse({ detail: 'Method not allowed.' }, 405)
+        return jsonResponse({ detail: 'Method not allowed.' }, 405, origin, allowedOrigins)
       }
 
       try {
-        return jsonResponse(await analyze(request, env))
+        return jsonResponse(await analyze(request, env), 200, origin, allowedOrigins)
       } catch (error) {
         if (error instanceof MedGemmaConfigurationError) {
-          return jsonResponse({ detail: error.message }, 503)
+          return jsonResponse({ detail: error.message }, 503, origin, allowedOrigins)
         }
         if (error instanceof SyntaxError) {
-          return jsonResponse({ detail: 'Request body must be valid JSON.' }, 400)
+          return jsonResponse({ detail: 'Request body must be valid JSON.' }, 400, origin, allowedOrigins)
         }
         if (error instanceof TypeError || error instanceof RangeError) {
-          return jsonResponse({ detail: error.message }, 400)
+          return jsonResponse({ detail: error.message }, 400, origin, allowedOrigins)
         }
-        return handleUnexpectedError(error)
+        return handleUnexpectedError(error, origin, allowedOrigins)
       }
     }
 
     if (url.pathname.startsWith('/api/')) {
-      return jsonResponse({ detail: 'Not found.' }, 404)
+      return jsonResponse({ detail: 'Not found.' }, 404, origin, allowedOrigins)
     }
 
     return env.ASSETS.fetch(request)
@@ -694,27 +701,55 @@ function joinAiUrl(baseUrl: string, path: string): string {
   return new URL(path.replace(/^\//u, ''), `${baseUrl.replace(/\/+$/u, '')}/`).toString()
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status = 200, origin: string | null = null, allowedOrigins: readonly string[] = []): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       'Content-Type': 'application/json',
-      ...corsHeaders(),
+      ...corsHeaders(origin, allowedOrigins),
     },
   })
 }
 
-function corsHeaders(): Record<string, string> {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+// SECURITY (M2): allowlist of origins permitted to call this API.
+// Hardcoded safe defaults; the `ALLOWED_ORIGINS` worker secret (in
+// wrangler.jsonc vars or via `wrangler secret put`) overrides at deploy
+// time as a space-separated list.
+const DEFAULT_ALLOWED_ORIGINS: readonly string[] = [
+  'https://docbob.robrary.com',
+  'https://docbob-dev.robrary.com',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+]
+
+function resolveAllowedOrigins(env: Env): readonly string[] {
+  const fromEnv = env && (env as unknown as { ALLOWED_ORIGINS?: unknown }).ALLOWED_ORIGINS
+  if (typeof fromEnv === 'string' && fromEnv.trim().length > 0) {
+    return fromEnv.trim().split(/\s+/).filter(Boolean)
   }
+  return DEFAULT_ALLOWED_ORIGINS
 }
 
-function handleUnexpectedError(error: unknown): Response {
-  if (error instanceof Error) {
-    return jsonResponse({ detail: error.message }, 500)
+function corsHeaders(origin: string | null, allowedOrigins: readonly string[]): Record<string, string> {
+  // SECURITY (M2): per-origin allowlist with Vary: Origin so caches don't
+  // serve a poisoned ACAO to a different consumer. Disallowed origins get
+  // NO ACAO header (browser will block), not a wildcard.
+  const base: Record<string, string> = {
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Vary': 'Origin',
   }
-  return jsonResponse({ detail: 'Unexpected server error.' }, 500)
+  if (origin && allowedOrigins.includes(origin)) {
+    base['Access-Control-Allow-Origin'] = origin
+  }
+  return base
+}
+
+function handleUnexpectedError(error: unknown, origin: string | null = null, allowedOrigins: readonly string[] = []): Response {
+  if (error instanceof Error) {
+    return jsonResponse({ detail: error.message }, 500, origin, allowedOrigins)
+  }
+  return jsonResponse({ detail: 'Unexpected server error.' }, 500, origin, allowedOrigins)
 }

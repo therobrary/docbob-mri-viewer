@@ -17,6 +17,7 @@
     "AI_MAX_TOKENS": "256",
     "AI_TEMPERATURE": "0.1",
     "AI_TOP_P": "0.8",
-    "AI_AUTH_HEADER_NAME": "Authorization"
+    "AI_AUTH_HEADER_NAME": "Authorization",
+    "ALLOWED_ORIGINS": "https://docbob.robrary.com https://docbob-dev.robrary.com http://localhost:3000 http://localhost:5173 http://127.0.0.1:3000 http://127.0.0.1:5173"
   }
 }
